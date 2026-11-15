@@ -1,0 +1,364 @@
+#include <iostream>
+#include <cstdlib>
+#include <cctype>
+#include <limits>
+#include "Student.h"
+#include "Admin.h"
+#include "RequestQueue.h"
+#include "Rating.h"
+#include "SkillTree.h"
+#include "Graph.h"
+#include "Matching.h"
+#include "Report.h"
+using namespace std;
+int readInt(const char* p,int minimum,int maximum)
+{
+    char line[64];
+    while(true)
+    {
+        cout<<p;
+        if(!cin.getline(line,64))
+        {
+            cin.clear();
+            cin.ignore(numeric_limits<streamsize>::max(),'\n');
+            cout<<"Please enter a number.\n";
+            continue;
+        }
+        char* end=0;
+        long value=strtol(line,&end,10);
+        while(end&&*end&&isspace(static_cast<unsigned char>(*end)))++end;
+        if(end&&*end=='\0'&&value>=minimum&&value<=maximum)return static_cast<int>(value);
+        cout<<"Enter a value from "<<minimum<<" to "<<maximum<<".\n";
+    }
+}
+void readText(const char* p,char* t,int n)
+{
+    cout<<p;
+    cin.getline(t,n);
+}
+void saveAll(StudentManager& s,RequestQueue& q,RatingSystem& r)
+{
+    s.saveToFile();
+    q.saveToFile();
+    r.saveToFile();
+}
+const char* statusName(RequestStatus s)
+{
+    return s==PENDING?"Pending":s==ACCEPTED?"Accepted":"Rejected";
+}
+void registerStudent(StudentManager& s,RequestQueue& q,RatingSystem& r)
+{
+    char n[60],b[40],u[30],p[30],skill[50];
+    int id=readInt("Student ID: ",1,999999);
+    readText("Name: ",n,60);
+    readText("Branch: ",b,40);
+    int sem=readInt("Semester: ",1,8);
+    readText("Username: ",u,30);
+    readText("Password: ",p,30);
+    readText("Skill you can teach: ",skill,50);
+    if(s.registerStudent(id,n,b,sem,u,p,skill))
+    {
+        saveAll(s,q,r);
+        cout<<"Registration saved.\n";
+    }else cout<<"Registration failed.\n";
+}
+void showReceived(StudentManager& s,const RequestQueue& q,int receiver)
+{
+    LearningRequest a[MAX_REQUESTS];
+    int c=q.getForReceiver(receiver,a,MAX_REQUESTS,true);
+    if(!c)
+    {
+        cout<<"No pending requests.\n";
+        return;
+    }
+    for(int i=0;i<c;++i)
+    {
+        Student* from=s.findById(a[i].senderId);
+        cout<<a[i].id<<" | "<<(from?from->getName():"Unknown")<<" | "<<a[i].topic<<"\n";
+    }
+}
+void matchingMenu(Student* me,StudentManager& s,RequestQueue& q,RatingSystem& r,MatchingSystem& m)
+{
+    char skill[50];
+    readText("Skill you want to learn: ",skill,50);Recommendation a[MAX_STUDENTS];
+    int count=m.findMatches(me,s,skill,a,MAX_STUDENTS);
+    if(!count)
+    {
+        cout<<"No matching teacher found.\n";
+        return;
+    }
+    for(int i=0;i<count;i++)
+        cout<<i+1<<". "<<a[i].student->getName()<<" | "<<a[i].student->getTeachSkill()<<" | Score "<<a[i].score<<"\n";
+    int pick=readInt("Send request to number (0 back): ",0,count);
+        if(pick&&q.send(me->getId(),a[pick-1].student->getId(),skill))
+        {
+            saveAll(s,q,r);
+            cout<<"Request sent.\n";
+        }
+    }
+void studentMenu(Student* me,StudentManager& s,RequestQueue& q,RatingSystem& r,ReportSystem& reports,SkillTree& tree,StudentGraph& graph,MatchingSystem& m)
+{
+    while(true)
+    {
+        cout<<"\n1.Profile\n2.Send request\n3.Respond requests\n4.Rate connected peer\n5.Add graph connection\n6.My graph connections\n7.View skill tree\n8.Get matches\n9.Report connected peer\n10.Logout\n";
+        int c=readInt("Choice: ",1,10);
+        if(c==1)me->displayProfile();
+        else if(c==2)
+        {
+            int id=readInt("Peer ID: ",1,999999);
+            char topic[50];
+            readText("Topic: ",topic,50);
+            Student* peer=s.findById(id);
+            if(peer&&!peer->isBanned()&&q.send(me->getId(),id,topic))
+            {
+                saveAll(s,q,r);
+                cout<<"Request saved.\n";
+            }else cout<<"Request failed.\n";
+        }else if(c==3)
+        {
+            showReceived(s,q,me->getId());
+            int id=readInt("Request ID (0 back): ",0,999999);
+            if(id)
+            {
+                int reply=readInt("1.Accept 2.Reject: ",1,2);
+                if(q.respond(id,me->getId(),reply==1))
+                {
+                    if(reply==1)
+                    {
+                        LearningRequest requests[MAX_REQUESTS];
+                        int count=q.getAll(requests,MAX_REQUESTS);
+                        for(int i=0;i<count;++i)
+                            if(requests[i].id==id)graph.connect(requests[i].senderId,requests[i].receiverId);
+                    }
+                    saveAll(s,q,r);
+                    cout<<"Saved.\n";
+                }else cout<<"Request not found.\n";
+            }
+        }else if(c==4)
+        {
+            int id=readInt("Accepted peer ID: ",1,999999);
+            Student* peer=s.findById(id);
+            int score=readInt("Score 1-5: ",1,5);
+            if(peer&&r.submit(me->getId(),*peer,score,q,graph))
+            {
+                r.recalculate(s);
+                saveAll(s,q,r);
+                cout<<"Rating saved.\n";
+            }else cout<<"Rating failed.\n";
+        }else if(c==5)
+        {
+            int id=readInt("Peer ID to connect: ",1,999999);
+            cout<<(graph.connect(me->getId(),id)?"Connection added.\n":"Connection failed.\n");
+        }else if(c==6)graph.display(me->getId());
+        else if(c==7)tree.display();
+        else if(c==8)matchingMenu(me,s,q,r,m);
+        else if(c==9)
+        {
+            int id=readInt("Connected peer ID: ",1,999999);
+            char reason[100];
+            readText("Report reason: ",reason,100);
+            if(s.findById(id)&&q.hasAcceptedPair(me->getId(),id)&&graph.areConnected(me->getId(),id)&&reports.submit(me->getId(),id,reason))
+            {
+                reports.saveToFile();
+                cout<<"Report submitted for admin review.\n";
+            }
+            else cout<<"Report failed. You can report only a connected peer once you have learned together.\n";
+        }
+        else return;
+    }
+}
+void showStudents(StudentManager& s)
+{
+    for(int i=0;i<s.getCount();++i)
+    {
+        Student* x=s.getStudentAt(i);
+        cout<<x->getId()<<" | "<<x->getName()<<" | "<<x->getAverageRating()<<" | "<<(x->isBanned()?"Banned":x->isFlagged()?"Flagged":"Active")<<"\n";
+    }
+}
+void showRequests(StudentManager& s,const RequestQueue& q)
+{
+    LearningRequest a[MAX_REQUESTS];
+    int c=q.getAll(a,MAX_REQUESTS);
+    if(!c)
+    {
+        cout<<"No requests.\n";
+        return;
+    }
+    for(int i=0;i<c;++i)
+    {
+        Student* x=s.findById(a[i].senderId);
+        Student* y=s.findById(a[i].receiverId);
+        cout<<a[i].id<<" | "<<(x?x->getName():"Removed")<<" -> "<<(y?y->getName():"Removed")<<" | "<<a[i].topic<<" | "<<statusName(a[i].status)<<"\n";
+    }
+}
+void showRatings(StudentManager& s,const RatingSystem& r)
+{
+    RatingRecord a[MAX_STUDENTS];
+    int c=r.getAll(a,MAX_STUDENTS);
+    if(!c)
+    {
+        cout<<"No ratings.\n";
+        return;
+    }
+    for(int i=0;i<c;++i)
+    {
+        Student* x=s.findById(a[i].raterId);
+        Student* y=s.findById(a[i].ratedId);
+        cout<<(x?x->getName():"Removed")<<" rated "<<(y?y->getName():"Removed")<<" "<<a[i].score<<"/5\n";
+    }
+}
+void showReports(StudentManager& s,const ReportSystem& reports)
+{
+    PeerReport a[MAX_REPORTS];
+    int c=reports.getAll(a,MAX_REPORTS);
+    if(!c)
+    {
+        cout<<"No peer reports.\n";
+        return;
+    }
+    for(int i=0;i<c;++i)
+    {
+        Student* from=s.findById(a[i].reporterId);
+        Student* against=s.findById(a[i].reportedId);
+        cout<<a[i].id<<" | "<<(from?from->getName():"Removed")<<" reported "<<(against?against->getName():"Removed")<<" (ID "<<a[i].reportedId<<") | "<<a[i].reason<<"\n";
+    }
+}
+void adminMenu(StudentManager& s,RequestQueue& q,RatingSystem& r,ReportSystem& reports)
+{
+    while(true)
+    {
+        cout<<"\n1.Students\n2.Requests\n3.Ratings\n4.Peer reports\n5.Ban\n6.Unban\n7.Remove student\n8.Logout\n";
+        int c=readInt("Choice: ",1,8);
+        if(c==1)showStudents(s);
+        else if(c==2)showRequests(s,q);
+        else if(c==3)showRatings(s,r);
+        else if(c==4)
+        {
+            showReports(s,reports);
+            int id=readInt("Reported student ID to ban (0 back): ",0,999999);
+            if(id)
+            {
+                Student* x=s.findById(id);
+                if(x)
+                {
+                    x->setManualBanned(true);
+                    saveAll(s,q,r);
+                    cout<<"Reported student banned.\n";
+                }else cout<<"Not found.\n";
+            }
+        }
+        else if(c==5||c==6)
+        {
+            Student* x=s.findById(readInt("Student ID: ",1,999999));
+            if(x)
+            {
+                x->setManualBanned(c==5);
+                x->setFlagged(c==5);
+                saveAll(s,q,r);
+                cout<<"Status updated.\n";
+            }else cout<<"Not found.\n";
+        }else if(c==7)
+        {
+            int id=readInt("Student ID: ",1,999999);
+            if(s.findById(id)&&readInt("1.Remove 2.Cancel: ",1,2)==1)
+            {
+                q.removeForStudent(id);
+                r.removeForStudent(id);
+                reports.removeForStudent(id);
+                s.removeById(id);
+                r.recalculate(s);
+                saveAll(s,q,r);
+                reports.saveToFile();
+                cout<<"Removed.\n";
+            }
+        }else return;
+    }
+}
+void addDemoData(StudentManager& s,RequestQueue& q,RatingSystem& r,StudentGraph& graph)
+{
+    if(s.getCount())return;
+    s.registerStudent(101,"Aarav Sharma","CSE",3,"aarav","pass123","C++, Python");
+    s.registerStudent(102,"Diya Singh","CSE",4,"diya","pass123","Python, SQL");
+    s.registerStudent(103,"Kabir Khan","CSE",3,"kabir","pass123","Data Structures, C++");
+    s.registerStudent(104,"Meera Iyer","CSE",5,"meera","pass123","Java, C++");
+    s.registerStudent(105,"Rohan Patel","IT",4,"rohan","pass123","Web Development, JavaScript");
+    s.registerStudent(106,"Ananya Gupta","CSE",2,"ananya","pass123","UI UX, HTML CSS");
+    s.registerStudent(107,"Vikram Das","ECE",3,"vikram","pass123","Python, Data Structures");
+    s.registerStudent(108,"Isha Nair","IT",5,"isha","pass123","React, JavaScript");
+    s.registerStudent(109,"Kunal Verma","CSE",4,"kunal","pass123","SQL, Python");
+    s.registerStudent(110,"Sneha Rao","ECE",2,"sneha","pass123","C++, Queue");
+    for(int i=0;i<s.getCount();++i)graph.addStudent(s.getStudentAt(i)->getId());
+    q.send(101,102,"Python"); q.respond(1,102,true);
+    q.send(104,102,"Python"); q.respond(2,102,true);
+    q.send(105,103,"Data Structures"); q.respond(3,103,true);
+    q.send(106,104,"Java"); q.respond(4,104,true);
+    q.send(107,108,"React"); q.respond(5,108,false);
+    q.send(109,102,"Python");
+    graph.connect(101,102); graph.connect(104,102); graph.connect(105,103); graph.connect(106,104);
+    r.submit(101,*s.findById(102),5,q,graph);
+    r.submit(104,*s.findById(102),4,q,graph);
+    r.submit(105,*s.findById(103),5,q,graph);
+    r.submit(106,*s.findById(104),4,q,graph);
+    r.recalculate(s);
+    saveAll(s,q,r);cout<<"Demo data added. Student login: aarav/pass123; admin login: admin/admin123\n";
+}
+int main()
+{
+    StudentManager s;
+    RequestQueue q;
+    RatingSystem r;
+    Admin a;
+    SkillTree tree;
+    StudentGraph graph;
+    MatchingSystem m;
+    ReportSystem reports;
+    s.loadFromFile();
+    q.loadFromFile();
+    r.loadFromFile();
+    reports.loadFromFile();
+    addDemoData(s,q,r,graph);
+    r.recalculate(s);
+    tree.loadDefaultSkills();
+    for(int i=0;i<s.getCount();++i)graph.addStudent(s.getStudentAt(i)->getId());
+    graph.loadFromFile();
+    LearningRequest accepted[MAX_REQUESTS];
+    int acceptedCount=q.getAll(accepted,MAX_REQUESTS);
+    for(int i=0;i<acceptedCount;++i)
+        if(accepted[i].status==ACCEPTED)graph.connect(accepted[i].senderId,accepted[i].receiverId);
+    while(true)
+    {
+        cout<<"\n1.Register\n2.Student login\n3.Admin login\n4.Exit\n";
+        int c=readInt("Choice: ",1,4);
+        if(c==1)
+        {
+            registerStudent(s,q,r);
+            if(s.getCount())graph.addStudent(s.getStudentAt(s.getCount()-1)->getId());
+        }else if(c==2)
+        {
+            char u[30],p[30];
+            readText("Username: ",u,30);
+            readText("Password: ",p,30);
+            Student* x=s.login(u,p);
+            if(x&&!x->isBanned())
+            {
+                if(x->isFlagged())cout<<"WARNING: Your rating is low. Improve future peer-learning sessions to avoid an automatic ban.\n";
+                studentMenu(x,s,q,r,reports,tree,graph,m);
+            }
+            else cout<<"Invalid login or banned.\n";
+        }else if(c==3)
+        {
+            char u[30],p[30];
+            readText("Admin username: ",u,30);
+            readText("Admin password: ",p,30);
+            if(a.login(u,p))adminMenu(s,q,r,reports);
+            else cout<<"Invalid admin.\n";
+        }else
+        {
+            saveAll(s,q,r);
+            reports.saveToFile();
+            graph.saveToFile();
+            cout<<"All data saved.\n";
+            return 0;
+        }
+    }
+}
