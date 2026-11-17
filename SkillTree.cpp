@@ -65,5 +65,4 @@ void SkillTree::loadDefaultSkills()
         add("Computer Science","Data Structures");
         add("Data Structures","Array");
         add("Data Structures","Linked List");
-        add("Data Structures","Queue");
     }
