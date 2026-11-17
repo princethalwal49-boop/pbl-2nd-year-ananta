@@ -16,6 +16,7 @@ PeerLearn is a console-based C++ application that helps students find suitable p
 - A student connection graph, including connections created by accepted learning requests.
 - Persistent student, request, rating, and graph connection data.
 - Seeded demo data that demonstrates all major workflows immediately.
+- students can see various skills available before registering  themselves.
 
 ## Data structures used
 
